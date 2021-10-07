@@ -56,10 +56,11 @@ b5=nn.Sequential(Inception(832,256,(160,320),(32,128),128),
 net=nn.Sequential(b1,b2,b3,b4,b5,nn.Linear(1024,10))
 
 '''改变形状，降低宽高，适应Fashion-MNIST的训练'''
-# X=torch.rand(size=(1,1,96,96))
-# for layer in net:
-#     X=layer(X)
-#     print(layer.__class__.__name__,'output shape:\t',X.shape)
+#训练时注释掉这部分代码
+X=torch.rand(size=(1,1,96,96))
+for layer in net:
+    X=layer(X)
+    print(layer.__class__.__name__,'output shape:\t',X.shape)
 
 '''模型训练'''
 lr,num_epochs,batch_size=0.1,10,128
