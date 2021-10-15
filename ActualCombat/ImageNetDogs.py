@@ -41,7 +41,7 @@ transform_train=torchvision.transforms.Compose([
 ])
 
 transform_test=torchvision.transforms.Compose([
-    torchvision.transformsl.Resize(256),
+    torchvision.transforms.Resize(256),
     torchvision.transforms.CenterCrop(224),
     torchvision.transforms.ToTensor(),
     torchvision.transforms.Normalize([0.485,0.456,0.406],
@@ -85,4 +85,80 @@ def get_net(devices):
         param.requires_grad=False
     return finetune_net
 
-#
+#计算损失
+loss=nn.CrossEntropyLoss(reduction='none')
+
+def evaluate_loss(data_iter,net,devices):
+    l_sum,n=0.0,0
+    for features,labels in data_iter:
+        features,labels=features.to(devices[0]),labels.to(devices[0])
+        outputs=net(features)
+        l=loss(outputs,labels)
+        l_sum+=l.sum()
+        n+=labels.numel()
+    return l_sum/n
+
+#训练函数
+def train(net,train_iter,valid_iter,num_epochs,lr,wd,devices,lr_period,lr_decay):
+    net=nn.DataParallel(net,device_ids=devices).to(devices[0])
+    trainer=torch.optim.SGD(
+        (param for param in net.parameters()if param.requires_grad),
+        lr=lr,momentum=0.9,weight_decay=wd)
+    scheduler=torch.optim.lr_scheduler.StepLR(trainer,lr_period,lr_decay)
+    num_batches,timer=len(train_iter),d2l.Timer()
+    legend=['train loss']
+    if valid_iter is not None:
+        legend.append('valid loss')
+    animator = d2l.Animator(xlabel='epoch', xlim=[1, num_epochs],
+                            legend=legend)
+    for epoch in range(num_epochs):
+        metric=d2l.Accumulator(2)
+        for i,(features,labels) in enumerate(train_iter):
+            timer.start()
+            features, labels = features.to(devices[0]), labels.to(devices[0])
+            trainer.zero_grad()
+            output=net(features)
+            l=loss(output,labels).sum()
+            l.backward()
+            trainer.step()
+            metric.add(l,labels.shape[0])
+            timer.stop()
+            if (i+1)%(num_batches//5)==0 or i==num_batches-1:
+                animator.add(epoch+(i+1)/num_batches,
+                             (metric[0]/metric[1],None))
+        measures=f'train loss {metric[0]/metric[1]:.3f}'
+        if valid_iter is not None:
+            valid_loss=evaluate_loss(valid_iter,net,devices)
+            animator.add(epoch+1,(None,valid_loss.detach()))
+        scheduler.step()
+    if valid_iter is not None:
+        measures+=f', valid loss {valid_loss:.3f}'
+    print(measures+f'\n{metric[1]*num_epochs/timer.sum():.1f}'
+          f'examples/sec on {str(devices)}')
+
+#验证和训练模型
+devices,num_epochs,lr,wd=d2l.try_all_gpus(),10,1e-4,1e-4
+lr_period,lr_decay,net=2,0.9,get_net(devices)
+train(net,train_iter,valid_iter,num_epochs,lr,wd,devices,lr_period,lr_decay)
+
+#对测试集分类
+net=get_net(devices)
+train(net,train_valid_iter,None,num_epochs,lr,wd,devices,lr_period,lr_decay)
+
+preds=[]
+for data,labels in test_iter:
+    output=torch.nn.functional.softmax(net(data.to(devices[0])),dim=0)
+    preds.extend(output.cpu().detach().numpy())
+ids=sorted(
+    os.listdir(os.path.join(data_dir,'train_valid_test','test','unknown'))
+)
+with open('submission.csv','w')as f:
+    f.write('id,'+','.join(train_valid_ds.classes)+'\n')
+    for i, output in zip(ids,preds):
+        f.write(
+            i.split('.')[0]+','+','.join([str(num) for num in output])+'\n'
+        )
+
+
+
+
